@@ -96,7 +96,6 @@ class OrderItem(models.Model):
         unique_together = ('order', 'animal')
 
     def clean(self):
-        # Business logic: A farmer cannot order their own animal.
         if self.order.buyer == self.animal.farmer:
             raise ValidationError("A farmer cannot order their own animal.")
 

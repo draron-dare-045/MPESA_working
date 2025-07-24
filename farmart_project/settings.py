@@ -2,7 +2,8 @@
 
 from pathlib import Path
 from datetime import timedelta
-from decouple import config # Make sure this import is here
+from decouple import config
+import dj_database_url # For Render database connection
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,8 +35,10 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # Whitenoise middleware for serving static files in production
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware', # CORS Middleware should be high up
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -64,16 +67,12 @@ TEMPLATES = [
 WSGI_APPLICATION = 'farmart_project.wsgi.application'
 
 
-# Database
+# Database configuration for Render
+# This will use the DATABASE_URL from your Render environment variables
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('DB_NAME'),
-        'USER': config('DB_USER'),
-        'PASSWORD': config('DB_PASSWORD'),
-        'HOST': config('DB_HOST'),
-        'PORT': config('DB_PORT'),
-    }
+    'default': dj_database_url.config(
+        default=config('DATABASE_URL')
+    )
 }
 
 # Custom User Model
@@ -100,6 +99,10 @@ USE_TZ = True
 STATIC_URL = 'static/'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Settings for serving static files in production with Whitenoise
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 
 # Default primary key field type
@@ -138,9 +141,11 @@ DJOSER = {
     },
 }
 
-# --- THIS IS THE FIX ---
-# We are allowing all origins for development purposes.
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS Settings
+CORS_ALLOW_ALL_ORIGINS = True # For development and initial deployment.
+# For higher security, you would use this instead:
+# CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', cast=lambda v: [s.strip() for s in v.split(',')])
+
 
 # M-PESA SETTINGS
 MPESA_ENVIRONMENT = config('MPESA_ENVIRONMENT')
