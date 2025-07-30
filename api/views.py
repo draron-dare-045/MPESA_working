@@ -1,5 +1,4 @@
 from rest_framework import viewsets, permissions, status, generics
-# ADD THIS IMPORT
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -13,16 +12,18 @@ from datetime import timedelta
 from django.db.models.functions import TruncDate
 
 from . import mpesa_api
-from .models import Animal, Order, OrderItem
+from .models import Animal, Order, OrderItem, User # Added User model import for clarity
 from .serializers import (
     AnimalSerializer,
     OrderReadSerializer, OrderWriteSerializer,
     UserSerializer,
     UserRegistrationSerializer
 )
-from .permissions import IsFarmerOrReadOnly, IsOwnerOrAdmin
+# --- 1. IMPORT THE NEW PERMISSION CLASS ---
+# Make sure you have created the IsOrderFarmerOrBuyerOrAdmin class in your permissions.py file
+from .permissions import IsFarmerOrReadOnly, IsOrderFarmerOrBuyerOrAdmin
 
-User = get_user_model()
+# User = get_user_model() # This is already done by importing User from models
 
 
 # ------------------- User Registration -------------------
@@ -59,8 +60,6 @@ class AnimalViewSet(viewsets.ModelViewSet):
     queryset = Animal.objects.filter(is_sold=False).order_by('-created_at')
     serializer_class = AnimalSerializer
     permission_classes = [permissions.IsAuthenticated, IsFarmerOrReadOnly]
-
-    # ADD THIS LINE TO ENABLE FILE UPLOADS
     parser_classes = (MultiPartParser, FormParser)
 
     def perform_create(self, serializer):
@@ -68,12 +67,14 @@ class AnimalViewSet(viewsets.ModelViewSet):
         serializer.save(farmer=self.request.user)
 
 
-# ------------------- Order ViewSet -------------------
+# ------------------- Order ViewSet (Corrected) -------------------
 
 class OrderViewSet(viewsets.ModelViewSet):
     """ViewSet for managing Orders."""
     queryset = Order.objects.all()
-    permission_classes = [permissions.IsAuthenticated, IsOwnerOrAdmin]
+
+    # --- 2. REPLACE THE PERMISSION CLASS HERE ---
+    permission_classes = [permissions.IsAuthenticated, IsOrderFarmerOrBuyerOrAdmin]
 
     def get_serializer_class(self):
         """Use different serializers for reading vs. writing data."""
@@ -88,6 +89,8 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         if user.is_staff:
             return queryset
+        # The IsOrderFarmerOrBuyerOrAdmin permission handles object-level logic,
+        # but this queryset filtering is still good for listing views.
         if user.user_type == User.Types.FARMER:
             return queryset.filter(items__animal__farmer=user).distinct()
         return queryset.filter(buyer=user)
@@ -96,7 +99,9 @@ class OrderViewSet(viewsets.ModelViewSet):
         """Set the buyer to the currently logged-in user when creating an order."""
         if self.request.user.user_type != User.Types.BUYER:
             raise permissions.PermissionDenied("Only Buyers can create orders.")
-        serializer.save(buyer=self.request.user, status=Order.OrderStatus.CONFIRMED)
+        # Default status for a new order should be PENDING, not CONFIRMED,
+        # so the farmer can confirm it.
+        serializer.save(buyer=self.request.user, status=Order.OrderStatus.PENDING)
 
 
 # ------------------- M-Pesa Payment View -------------------
@@ -131,7 +136,6 @@ class MakePaymentView(APIView):
 
         amount = sum(item.animal.price * item.quantity for item in order.items.all())
 
-        # Create transaction description
         item_names = [item.animal.name for item in order.items.all()]
         transaction_desc = ", ".join(item_names)
         if len(transaction_desc) > 90:
@@ -203,6 +207,8 @@ class MpesaCallbackView(APIView):
 
         return Response({'status': 'ok'})
     
+
+# --- This is your dashboard view, which is correct ---
 class FarmerProfessionalDashboardView(APIView):
     """
     Provides all necessary statistics for a professional farmer dashboard.
@@ -215,17 +221,14 @@ class FarmerProfessionalDashboardView(APIView):
 
         farmer = request.user
         
-        # --- Define Statuses Based on Your Logic ---
         SALES_STATUSES = [Order.OrderStatus.PAID, Order.OrderStatus.CONFIRMED]
 
-        # === 1. Data for Statistic Cards ===
         sales_items = OrderItem.objects.filter(animal__farmer=farmer, order__status__in=SALES_STATUSES)
         
         total_revenue = sales_items.aggregate(total=Sum(F('quantity') * F('animal__price')))['total'] or 0
         total_sales_count = Order.objects.filter(items__animal__farmer=farmer, status__in=SALES_STATUSES).distinct().count()
         active_listings_count = Animal.objects.filter(farmer=farmer, is_sold=False, quantity__gt=0).count()
 
-        # === 2. Data for Recent Sales Feed (Last 10 Sales) ===
         recent_sales = OrderItem.objects.filter(
             animal__farmer=farmer,
             order__status__in=SALES_STATUSES
@@ -237,11 +240,10 @@ class FarmerProfessionalDashboardView(APIView):
             'animal_name': item.animal.name,
             'quantity': item.quantity,
             'price': item.animal.price,
-            'status': item.order.get_status_display(), # 'Paid' or 'Confirmed'
+            'status': item.order.get_status_display(),
             'buyer': item.order.buyer.username
         } for item in recent_sales]
 
-        # === 3. Data for Sales Line Chart (Last 30 Days) ===
         thirty_days_ago = timezone.now().date() - timedelta(days=30)
         sales_by_day = sales_items.filter(
             order__created_at__gte=thirty_days_ago
@@ -255,7 +257,6 @@ class FarmerProfessionalDashboardView(APIView):
             'data': [item['daily_revenue'] for item in sales_by_day],
         }
 
-        # === 4. Assemble Final Response ===
         dashboard_data = {
             'total_revenue': total_revenue,
             'total_sales_count': total_sales_count,
