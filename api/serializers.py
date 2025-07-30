@@ -2,7 +2,7 @@ from rest_framework import serializers
 from .models import User, Animal, Order, OrderItem
 
 # === User and Registration Serializers ===
-# ... (no changes needed here, keeping for context)
+# These are correct and do not need changes.
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -18,36 +18,43 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return user
 
 
-# === CORRECTED Animal Serializer ===
+# === FINAL CORRECTED Animal Serializer ===
+# This version correctly handles both file uploads and generating the full URL for reading.
 
 class AnimalSerializer(serializers.ModelSerializer):
-    """Serializer for the Animal model."""
+    """Serializer for the Animal model that handles file uploads and URL generation."""
     farmer_username = serializers.CharField(source='farmer.username', read_only=True)
     
-    # ADD THIS LINE: Tell DRF to use a custom method for the image field.
-    image = serializers.SerializerMethodField()
+    # This field will correctly handle the file upload on input (POST/PUT).
+    # 'required=False' allows creating/updating an animal without changing the image.
+    image = serializers.ImageField(required=False, use_url=True)
 
     class Meta:
         model = Animal
         fields = [
             'id', 'farmer', 'farmer_username', 'name', 'animal_type', 'breed',
-            'age', 'price', 'description', 'image', # This now refers to the method field above
+            'age', 'price', 'description', 'image', 
             'is_sold', 'quantity', 'created_at', 'updated_at'
         ]
         read_only_fields = ['farmer', 'is_sold']
 
-    # ADD THIS METHOD: Define how to get the value for the 'image' field.
-    def get_image(self, animal):
+    def to_representation(self, instance):
         """
-        Return the full URL of the image from Cloudinary, or None if no image exists.
+        This method formats the output. When reading data (GET), it will convert
+        the image field to its full URL from Cloudinary.
         """
-        if animal.image and hasattr(animal.image, 'url'):
-            return animal.image.url
-        return None
+        representation = super().to_representation(instance)
+        # If the animal instance has an image, replace the default representation with the full URL.
+        if instance.image and hasattr(instance.image, 'url'):
+            representation['image'] = instance.image.url
+        else:
+            # If there is no image, ensure the representation is null.
+            representation['image'] = None
+        return representation
 
 
 # === Order and OrderItem Serializers (Read/Write Pattern) ===
-# ... (no changes needed here)
+# These are correct and do not need changes.
 class OrderItemReadSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source='animal.name', read_only=True)
     price = serializers.DecimalField(source='animal.price', max_digits=10, decimal_places=2, read_only=True)
