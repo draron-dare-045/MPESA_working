@@ -9,6 +9,7 @@ from .views import (
     MpesaCallbackView,
     UserProfileView,
     RegisterUserView,
+    FarmerProfessionalDashboardView, # <--- 1. IMPORT THE NEW VIEW
 )
 
 # The router automatically generates URL patterns for ViewSets
@@ -17,12 +18,17 @@ router.register(r'animals', AnimalViewSet, basename='animal')
 router.register(r'orders', OrderViewSet, basename='order')
 
 urlpatterns = [
-    # ViewSet routes
+    # ViewSet routes are handled by the router
     path('', include(router.urls)),
     
     # Custom view routes
     path('register/', RegisterUserView.as_view(), name='register-user'),
     path('users/me/', UserProfileView.as_view(), name='user-profile'),
+    
+    # --- 2. ADD THE NEW DASHBOARD URL PATTERN HERE ---
+    path('dashboard/pro-stats/', FarmerProfessionalDashboardView.as_view(), name='farmer-pro-stats'),
+
+    # Payment related routes
     path('make-payment/', MakePaymentView.as_view(), name='make-payment'),
     path('mpesa-callback/', MpesaCallbackView.as_view(), name='mpesa-callback'),
 ]

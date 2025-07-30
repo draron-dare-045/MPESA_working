@@ -5,9 +5,12 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 from django.db import transaction
-
+from django.db.models import Sum, F, Count
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
+from django.utils import timezone
+from datetime import timedelta
+from django.db.models.functions import TruncDate
 
 from . import mpesa_api
 from .models import Animal, Order, OrderItem
@@ -199,3 +202,66 @@ class MpesaCallbackView(APIView):
             print(f"Error: Order with ID {order_id} not found.")
 
         return Response({'status': 'ok'})
+    
+class FarmerProfessionalDashboardView(APIView):
+    """
+    Provides all necessary statistics for a professional farmer dashboard.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        if request.user.user_type != User.Types.FARMER:
+            return Response({'error': 'Only farmers can access this dashboard.'}, status=status.HTTP_403_FORBIDDEN)
+
+        farmer = request.user
+        
+        # --- Define Statuses Based on Your Logic ---
+        SALES_STATUSES = [Order.OrderStatus.PAID, Order.OrderStatus.CONFIRMED]
+
+        # === 1. Data for Statistic Cards ===
+        sales_items = OrderItem.objects.filter(animal__farmer=farmer, order__status__in=SALES_STATUSES)
+        
+        total_revenue = sales_items.aggregate(total=Sum(F('quantity') * F('animal__price')))['total'] or 0
+        total_sales_count = Order.objects.filter(items__animal__farmer=farmer, status__in=SALES_STATUSES).distinct().count()
+        active_listings_count = Animal.objects.filter(farmer=farmer, is_sold=False, quantity__gt=0).count()
+
+        # === 2. Data for Recent Sales Feed (Last 10 Sales) ===
+        recent_sales = OrderItem.objects.filter(
+            animal__farmer=farmer,
+            order__status__in=SALES_STATUSES
+        ).select_related('order', 'animal', 'order__buyer').order_by('-order__created_at')[:10]
+
+        recent_sales_data = [{
+            'order_id': item.order.id,
+            'date': item.order.created_at.strftime('%Y-%m-%d'),
+            'animal_name': item.animal.name,
+            'quantity': item.quantity,
+            'price': item.animal.price,
+            'status': item.order.get_status_display(), # 'Paid' or 'Confirmed'
+            'buyer': item.order.buyer.username
+        } for item in recent_sales]
+
+        # === 3. Data for Sales Line Chart (Last 30 Days) ===
+        thirty_days_ago = timezone.now().date() - timedelta(days=30)
+        sales_by_day = sales_items.filter(
+            order__created_at__gte=thirty_days_ago
+        ).annotate(date=TruncDate('order__created_at')) \
+         .values('date') \
+         .annotate(daily_revenue=Sum(F('quantity') * F('animal__price'))) \
+         .order_by('date')
+        
+        sales_over_time_data = {
+            'labels': [item['date'].strftime('%b %d') for item in sales_by_day],
+            'data': [item['daily_revenue'] for item in sales_by_day],
+        }
+
+        # === 4. Assemble Final Response ===
+        dashboard_data = {
+            'total_revenue': total_revenue,
+            'total_sales_count': total_sales_count,
+            'active_listings_count': active_listings_count,
+            'recent_sales': recent_sales_data,
+            'sales_over_time': sales_over_time_data,
+        }
+
+        return Response(dashboard_data)
