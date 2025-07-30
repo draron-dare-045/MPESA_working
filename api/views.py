@@ -1,6 +1,4 @@
 from rest_framework import viewsets, permissions, status, generics
-# ADD THIS IMPORT
-from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
@@ -49,16 +47,13 @@ class UserProfileView(APIView):
         return Response(serializer.data)
 
 
-# ------------------- Animal ViewSet (Corrected) -------------------
+# ------------------- Animal ViewSet -------------------
 
 class AnimalViewSet(viewsets.ModelViewSet):
     """ViewSet for listing, creating, retrieving, updating, and deleting Animals."""
     queryset = Animal.objects.filter(is_sold=False).order_by('-created_at')
     serializer_class = AnimalSerializer
     permission_classes = [permissions.IsAuthenticated, IsFarmerOrReadOnly]
-
-    # ADD THIS LINE TO ENABLE FILE UPLOADS
-    parser_classes = (MultiPartParser, FormParser)
 
     def perform_create(self, serializer):
         """Set the farmer to the currently logged-in user when creating an animal."""
