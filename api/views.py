@@ -55,11 +55,10 @@ class AnimalViewSet(viewsets.ModelViewSet):
 # ------------------- Order ViewSet (FINAL CORRECTED VERSION) -------------------
 class OrderViewSet(viewsets.ModelViewSet):
     """ViewSet for managing Orders."""
-    # The `queryset` attribute is removed to prevent conflicts with get_queryset.
     permission_classes = [permissions.IsAuthenticated, IsOrderFarmerOrBuyerOrAdmin]
 
     def get_serializer_class(self):
-        """Use the correct serializer for the specific action."""
+        # This part is correct
         if self.action == 'create':
             return OrderWriteSerializer
         if self.action in ['update', 'partial_update']:
@@ -67,27 +66,28 @@ class OrderViewSet(viewsets.ModelViewSet):
         return OrderReadSerializer
 
     def get_queryset(self):
-        """Efficiently filter and fetch orders for the current user."""
+        # This part is correct
         user = self.request.user
         queryset = Order.objects.select_related('buyer').prefetch_related('items__animal').all()
-
         if user.is_staff:
             return queryset.order_by('-created_at')
         if user.user_type == User.Types.FARMER:
             return queryset.filter(items__animal__farmer=user).distinct().order_by('-created_at')
         return queryset.filter(buyer=user).order_by('-created_at')
 
+    # --- THIS IS THE FINAL, CORRECTED perform_create METHOD ---
     def perform_create(self, serializer):
         """Set the buyer and reduce stock in a safe transaction."""
         if self.request.user.user_type != User.Types.BUYER:
             raise permissions.PermissionDenied("Only Buyers can create orders.")
         try:
             with transaction.atomic():
-                # Pass request context to serializer to access the user
-                order = serializer.save(request=self.request)
-                
-                # The logic has been moved to the serializer's .create() method
-                # but we can still perform the stock reduction here after it's saved.
+                # The serializer's .create() method will be called automatically.
+                # It has access to the user via the context.
+                # We simply call .save() with NO arguments.
+                order = serializer.save()
+
+                # Post-creation stock reduction logic
                 for item in order.items.all():
                     animal_to_update = Animal.objects.select_for_update().get(id=item.animal.id)
                     if animal_to_update.quantity < item.quantity:
@@ -99,7 +99,6 @@ class OrderViewSet(viewsets.ModelViewSet):
         except Exception as e:
             print(f"Order creation failed: {e}")
             raise serializers.ValidationError("Could not create order due to a stock issue or server error.")
-
 
 class MakePaymentView(APIView):
     """View to initiate an M-Pesa STK push."""
