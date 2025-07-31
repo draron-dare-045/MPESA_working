@@ -70,25 +70,20 @@ class OrderItemWriteSerializer(serializers.ModelSerializer):
 
 class OrderWriteSerializer(serializers.ModelSerializer):
     items = OrderItemWriteSerializer(many=True)
+
     class Meta:
         model = Order
-        fields = ['id', 'items'] 
-    def create(self, validated_data):
-        # Note: The actual creation logic including stock reduction
-        # has been moved to the view's perform_create for better control.
-        # This serializer is now mainly for validation.
-        items_data = validated_data.get('items', [])
-        if not items_data:
-            raise serializers.ValidationError("Cannot create an empty order.")
-        
-        # We can perform initial validation here if needed
-        for item_data in items_data:
-            animal = item_data['animal']
-            if animal.is_sold or animal.quantity < item_data['quantity']:
-                 raise serializers.ValidationError(f"Not enough stock for '{animal.name}'.")
+        # The serializer only needs to validate the 'items' field from the frontend.
+        # The 'id' is read-only and the 'buyer' is added by the view.
+        fields = ['items']
 
-        # The actual object creation is handled in the view.
-        return validated_data
+    def validate_items(self, items):
+        """
+        Custom validation to check for empty orders.
+        """
+        if not items:
+            raise serializers.ValidationError("Cannot create an empty order. Please add items to your cart.")
+        return items
 
 
 # === THIS IS THE NEW SERIALIZER YOU NEED TO ADD ===
