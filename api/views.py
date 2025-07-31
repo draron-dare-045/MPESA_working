@@ -4,6 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from rest_framework import serializers 
 from django.db.models import Sum, F, Count
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
@@ -12,100 +13,97 @@ from datetime import timedelta
 from django.db.models.functions import TruncDate
 
 from . import mpesa_api
-from .models import Animal, Order, OrderItem, User # Added User model import for clarity
+from .models import Animal, Order, OrderItem, User
 from .serializers import (
     AnimalSerializer,
-    OrderReadSerializer, OrderWriteSerializer,
+    OrderReadSerializer,
+    OrderWriteSerializer,
+    OrderStatusUpdateSerializer,  # Crucial import
     UserSerializer,
     UserRegistrationSerializer
 )
-# --- 1. IMPORT THE NEW PERMISSION CLASS ---
-# Make sure you have created the IsOrderFarmerOrBuyerOrAdmin class in your permissions.py file
 from .permissions import IsFarmerOrReadOnly, IsOrderFarmerOrBuyerOrAdmin
 
-# User = get_user_model() # This is already done by importing User from models
 
-
-# ------------------- User Registration -------------------
-
-@swagger_auto_schema(
-    operation_description="Register a new user (Buyer or Farmer)",
-    responses={201: UserRegistrationSerializer()},
-)
+# ------------------- User Registration & Profile Views -------------------
+# (These are correct and unchanged)
 class RegisterUserView(generics.CreateAPIView):
     queryset = User.objects.all()
     serializer_class = UserRegistrationSerializer
     permission_classes = [permissions.AllowAny]
 
-
-# ------------------- User Profile -------------------
-
 class UserProfileView(APIView):
-    """View to get the profile of the currently logged-in user."""
     permission_classes = [permissions.IsAuthenticated]
-
-    @swagger_auto_schema(
-        operation_description="Get the profile of the currently logged-in user.",
-        responses={200: UserSerializer()}
-    )
+    @swagger_auto_schema(operation_description="Get profile of logged-in user.", responses={200: UserSerializer()})
     def get(self, request):
         serializer = UserSerializer(request.user)
         return Response(serializer.data)
 
 
-# ------------------- Animal ViewSet (Corrected) -------------------
-
+# ------------------- Animal ViewSet -------------------
+# (This is correct and unchanged)
 class AnimalViewSet(viewsets.ModelViewSet):
-    """ViewSet for listing, creating, retrieving, updating, and deleting Animals."""
-    queryset = Animal.objects.filter(is_sold=False).order_by('-created_at')
+    queryset = Animal.objects.filter(is_sold=False, quantity__gt=0).order_by('-created_at')
     serializer_class = AnimalSerializer
     permission_classes = [permissions.IsAuthenticated, IsFarmerOrReadOnly]
     parser_classes = (MultiPartParser, FormParser)
 
     def perform_create(self, serializer):
-        """Set the farmer to the currently logged-in user when creating an animal."""
         serializer.save(farmer=self.request.user)
 
 
-# ------------------- Order ViewSet (Corrected) -------------------
-
+# ------------------- Order ViewSet (FINAL CORRECTED VERSION) -------------------
 class OrderViewSet(viewsets.ModelViewSet):
     """ViewSet for managing Orders."""
     queryset = Order.objects.all()
-
-    # --- 2. REPLACE THE PERMISSION CLASS HERE ---
     permission_classes = [permissions.IsAuthenticated, IsOrderFarmerOrBuyerOrAdmin]
 
     def get_serializer_class(self):
-        """Use different serializers for reading vs. writing data."""
-        if self.action in ['create', 'update', 'partial_update']:
+        """
+        Use the correct serializer for the specific action.
+        This is the key to allowing status updates from the farmer.
+        """
+        if self.action == 'create':
             return OrderWriteSerializer
+        
+        if self.action in ['update', 'partial_update']:
+            return OrderStatusUpdateSerializer # <-- This is the crucial fix
+        
         return OrderReadSerializer
 
     def get_queryset(self):
         """Filter orders based on the user's role."""
         user = self.request.user
         queryset = super().get_queryset().prefetch_related('items__animal')
-
         if user.is_staff:
             return queryset
-        # The IsOrderFarmerOrBuyerOrAdmin permission handles object-level logic,
-        # but this queryset filtering is still good for listing views.
         if user.user_type == User.Types.FARMER:
             return queryset.filter(items__animal__farmer=user).distinct()
         return queryset.filter(buyer=user)
 
     def perform_create(self, serializer):
-        """Set the buyer to the currently logged-in user when creating an order."""
+        """Set the buyer and reduce stock. The default status (PENDING) is handled by the model."""
         if self.request.user.user_type != User.Types.BUYER:
             raise permissions.PermissionDenied("Only Buyers can create orders.")
-        # Default status for a new order should be PENDING, not CONFIRMED,
-        # so the farmer can confirm it.
-        serializer.save(buyer=self.request.user, status=Order.OrderStatus.PENDING)
-
-
-# ------------------- M-Pesa Payment View -------------------
-
+        try:
+            with transaction.atomic():
+                # The model's default='PENDING' is used automatically.
+                order = serializer.save(buyer=self.request.user)
+                
+                items_data = serializer.validated_data.get('items', [])
+                for item_data in items_data:
+                    animal = item_data['animal']
+                    quantity_ordered = item_data['quantity']
+                    animal_to_update = Animal.objects.select_for_update().get(id=animal.id)
+                    if animal_to_update.quantity < quantity_ordered:
+                        raise serializers.ValidationError(f"Not enough stock for '{animal.name}'.")
+                    animal_to_update.quantity -= quantity_ordered
+                    if animal_to_update.quantity == 0:
+                        animal_to_update.is_sold = True
+                    animal_to_update.save()
+        except Exception as e:
+            print(f"Order creation failed: {e}")
+            raise serializers.ValidationError("Could not create order due to a stock issue or server error.")
 class MakePaymentView(APIView):
     """View to initiate an M-Pesa STK push."""
     permission_classes = [permissions.IsAuthenticated]

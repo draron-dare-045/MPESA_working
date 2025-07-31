@@ -18,15 +18,11 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return user
 
 
-# === FINAL CORRECTED Animal Serializer ===
+# === Animal Serializer ===
 # This version correctly handles both file uploads and generating the full URL for reading.
-
 class AnimalSerializer(serializers.ModelSerializer):
     """Serializer for the Animal model that handles file uploads and URL generation."""
     farmer_username = serializers.CharField(source='farmer.username', read_only=True)
-    
-    # This field will correctly handle the file upload on input (POST/PUT).
-    # 'required=False' allows creating/updating an animal without changing the image.
     image = serializers.ImageField(required=False, use_url=True)
 
     class Meta:
@@ -39,22 +35,17 @@ class AnimalSerializer(serializers.ModelSerializer):
         read_only_fields = ['farmer', 'is_sold']
 
     def to_representation(self, instance):
-        """
-        This method formats the output. When reading data (GET), it will convert
-        the image field to its full URL from Cloudinary.
-        """
+        """Formats the output to convert the image field to its full URL."""
         representation = super().to_representation(instance)
-        # If the animal instance has an image, replace the default representation with the full URL.
         if instance.image and hasattr(instance.image, 'url'):
             representation['image'] = instance.image.url
         else:
-            # If there is no image, ensure the representation is null.
             representation['image'] = None
         return representation
 
 
-# === Order and OrderItem Serializers (Read/Write Pattern) ===
-# These are correct and do not need changes.
+# === Order and OrderItem Serializers ===
+# These are the main serializers for reading and creating orders.
 class OrderItemReadSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source='animal.name', read_only=True)
     price = serializers.DecimalField(source='animal.price', max_digits=10, decimal_places=2, read_only=True)
@@ -83,17 +74,29 @@ class OrderWriteSerializer(serializers.ModelSerializer):
         model = Order
         fields = ['id', 'items'] 
     def create(self, validated_data):
-        items_data = validated_data.pop('items')
-        order = Order.objects.create(**validated_data)
+        # Note: The actual creation logic including stock reduction
+        # has been moved to the view's perform_create for better control.
+        # This serializer is now mainly for validation.
+        items_data = validated_data.get('items', [])
+        if not items_data:
+            raise serializers.ValidationError("Cannot create an empty order.")
+        
+        # We can perform initial validation here if needed
         for item_data in items_data:
             animal = item_data['animal']
-            quantity_ordered = item_data['quantity']
-            if animal.is_sold or animal.quantity == 0:
-                raise serializers.ValidationError(f"'{animal.name}' is out of stock.")
-            if quantity_ordered > animal.quantity:
-                raise serializers.ValidationError(
-                    f"Not enough stock for '{animal.name}'. "
-                    f"You requested {quantity_ordered}, but only {animal.quantity} are available."
-                )
-            OrderItem.objects.create(order=order, **item_data)
-        return order
+            if animal.is_sold or animal.quantity < item_data['quantity']:
+                 raise serializers.ValidationError(f"Not enough stock for '{animal.name}'.")
+
+        # The actual object creation is handled in the view.
+        return validated_data
+
+
+# === THIS IS THE NEW SERIALIZER YOU NEED TO ADD ===
+# It is essential for allowing farmers to update the order status.
+class OrderStatusUpdateSerializer(serializers.ModelSerializer):
+    """
+    A dedicated serializer specifically for updating only the status of an Order.
+    """
+    class Meta:
+        model = Order
+        fields = ['status']

@@ -82,7 +82,7 @@ class Order(models.Model):
         related_name='orders',
         limit_choices_to={'user_type': User.Types.BUYER}
     )
-    status = models.CharField(max_length=20, choices=OrderStatus.choices, default=OrderStatus.CONFIRMED)
+    status = models.CharField(max_length=20, choices=OrderStatus.choices, default=OrderStatus.PENDING)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
