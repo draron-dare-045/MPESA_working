@@ -73,17 +73,28 @@ class OrderWriteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Order
-        # The serializer only needs to validate the 'items' field from the frontend.
-        # The 'id' is read-only and the 'buyer' is added by the view.
-        fields = ['items']
+        fields = ['id', 'items'] # The 'id' will be read-only on response
 
-    def validate_items(self, items):
+    def create(self, validated_data):
         """
-        Custom validation to check for empty orders.
+        This method correctly handles the creation of an Order and its nested OrderItems.
         """
-        if not items:
-            raise serializers.ValidationError("Cannot create an empty order. Please add items to your cart.")
-        return items
+        # Get the nested items data from the validated data
+        items_data = validated_data.pop('items')
+        
+        # The 'buyer' is not in validated_data, it must be passed from the view.
+        # We get it from the 'context' which the view provides.
+        buyer = self.context['request'].user
+        
+        # Create the main Order object
+        order = Order.objects.create(buyer=buyer, **validated_data)
+        
+        # Loop through the items data to create the OrderItem objects
+        for item_data in items_data:
+            OrderItem.objects.create(order=order, **item_data)
+            
+        # The stock reduction logic will now be handled in the view after this.
+        return order
 
 
 # === THIS IS THE NEW SERIALIZER YOU NEED TO ADD ===
