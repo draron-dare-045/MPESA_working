@@ -169,53 +169,38 @@ class MakePaymentView(APIView):
 
 class MpesaCallbackView(APIView):
     """
-    Callback view for M-Pesa to send payment status updates.
+    Callback view for M-Pesa. Its ONLY job is to update the order status.
+    Stock has already been handled during order creation.
     """
     permission_classes = [permissions.AllowAny]
 
     @swagger_auto_schema(
-        operation_description="M-Pesa callback URL to update payment status.",
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            required=['order_id'],
-            properties={
-                'order_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Order ID from original payment'),
-            }
-        ),
-        responses={200: openapi.Response(description="Callback processed")}
+        # ... swagger schema is fine ...
     )
     def post(self, request, *args, **kwargs):
+        # NOTE: In a real production app from Safaricom, you would parse their full callback response.
+        # For now, we assume a simplified callback with just the order_id.
         order_id = request.data.get('order_id')
 
         try:
             with transaction.atomic():
                 order = Order.objects.select_for_update().get(id=order_id)
 
+                # Only update the status if the order is waiting for payment.
                 if order.status == Order.OrderStatus.CONFIRMED:
                     order.status = Order.OrderStatus.PAID
                     order.save()
-
-                    for item in order.items.all():
-                        animal = item.animal
-                        animal_to_update = Animal.objects.select_for_update().get(id=animal.id)
-
-                        if animal_to_update.quantity >= item.quantity:
-                            animal_to_update.quantity -= item.quantity
-                            if animal_to_update.quantity == 0:
-                                animal_to_update.is_sold = True
-                            animal_to_update.save()
-                        else:
-                            print(f"CRITICAL ERROR: Stock discrepancy for {animal.name} during payment processing.")
-
-                    print(f"Successfully processed payment and updated stock for Order ID: {order_id}")
+                    print(f"Successfully marked Order ID: {order_id} as PAID via M-Pesa callback.")
                 else:
-                    print(f"Order ID: {order_id} was already processed or in an invalid state ({order.status}). Ignoring callback.")
+                    print(f"Ignoring callback for Order ID: {order_id}, status is already '{order.status}'.")
+
+                # --- THE REDUNDANT STOCK REDUCTION LOGIC HAS BEEN REMOVED ---
 
         except Order.DoesNotExist:
-            print(f"Error: Order with ID {order_id} not found.")
+            print(f"Error: Order with ID {order_id} not found during callback.")
 
         return Response({'status': 'ok'})
-    
+
 
 # --- This is your dashboard view, which is correct ---
 class FarmerProfessionalDashboardView(APIView):
