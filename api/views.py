@@ -59,28 +59,39 @@ class OrderViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, IsOrderFarmerOrBuyerOrAdmin]
 
     def get_serializer_class(self):
-        """
-        Use the correct serializer for the specific action.
-        This is the key to allowing status updates from the farmer.
-        """
+        """Use the correct serializer for the specific action."""
         if self.action == 'create':
             return OrderWriteSerializer
-        
         if self.action in ['update', 'partial_update']:
-            return OrderStatusUpdateSerializer # <-- This is the crucial fix
-        
+            return OrderStatusUpdateSerializer
         return OrderReadSerializer
 
+    # --- THIS IS THE UPDATED, HIGH-PERFORMANCE METHOD ---
     def get_queryset(self):
-        """Filter orders based on the user's role."""
+        """
+        Efficiently filter and fetch orders for the current user,
+        pre-loading all necessary related data to prevent slow performance.
+        """
         user = self.request.user
-        queryset = super().get_queryset().prefetch_related('items__animal')
-        if user.is_staff:
-            return queryset
-        if user.user_type == User.Types.FARMER:
-            return queryset.filter(items__animal__farmer=user).distinct()
-        return queryset.filter(buyer=user)
+        
+        # Start with the base queryset and pre-load all related data.
+        # This is the key performance improvement.
+        queryset = Order.objects.select_related('buyer').prefetch_related(
+            'items__animal'
+        ).all()
 
+        if user.is_staff:
+            # Admins can see all orders, sorted by most recent
+            return queryset.order_by('-created_at')
+
+        if user.user_type == User.Types.FARMER:
+            # Farmers see orders containing their animals
+            return queryset.filter(items__animal__farmer=user).distinct().order_by('-created_at')
+        
+        # Buyers see their own orders
+        return queryset.filter(buyer=user).order_by('-created_at')
+
+    # --- THIS METHOD IS CORRECT AND UNCHANGED ---
     def perform_create(self, serializer):
         """Set the buyer and reduce stock. The default status (PENDING) is handled by the model."""
         if self.request.user.user_type != User.Types.BUYER:
